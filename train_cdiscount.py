@@ -132,8 +132,8 @@ def get_split(split_name, dataset_dir, file_pattern=file_pattern, file_pattern_f
     num_readers = 4,
     num_samples = num_samples,
     num_classes = num_classes,
-  	# labels_to_name = labels_to_name_dict,
-  	items_to_descriptions = items_to_descriptions)
+    # labels_to_name = labels_to_name_dict,
+    items_to_descriptions = items_to_descriptions)
 
   return dataset
 
@@ -182,75 +182,75 @@ def load_batch(dataset, batch_size, height=image_size, width=image_size, is_trai
   return images, raw_images, labels
 
 def run():
-    # Create the log directory here. Must be done here otherwise import will activate this unneededly.
-    if not os.path.exists(log_dir):
-      os.mkdir(log_dir)
+  # Create the log directory here. Must be done here otherwise import will activate this unneededly.
+  if not os.path.exists(log_dir):
+    os.mkdir(log_dir)
 
     # ======================= TRAINING PROCESS =========================
     # Now we start to construct the graph and build our model
-    with tf.Graph().as_default() as graph:
-  	  tf.logging.set_verbosity(tf.logging.INFO) # Set the verbosity to INFO level
+  with tf.Graph().as_default() as graph:
+    tf.logging.set_verbosity(tf.logging.INFO) # Set the verbosity to INFO level
 
-      # First create the dataset and load one batch
-      dataset = get_split('train', dataset_dir, file_pattern=file_pattern)
+    # First create the dataset and load one batch
+    dataset = get_split('train', dataset_dir, file_pattern=file_pattern)
 
-    	# Know the number steps to take before decaying the learning rate and batches per epoch
-    	num_batches_per_epoch = int(dataset.num_samples / batch_size)
-    	num_steps_per_epoch = int(num_batches_per_epoch / num_gpus) # Because one step is num_gpus batch processed
-    	decay_steps = int(num_epochs_before_decay * num_steps_per_epoch)
+    # Know the number steps to take before decaying the learning rate and batches per epoch
+    num_batches_per_epoch = int(dataset.num_samples / batch_size)
+    num_steps_per_epoch = int(num_batches_per_epoch / num_gpus) # Because one step is num_gpus batch processed
+    decay_steps = int(num_epochs_before_decay * num_steps_per_epoch)
 
-    	# Create the global step for monitoring the learning_rate and training.
-    	global_step = get_or_create_global_step()
+    # Create the global step for monitoring the learning_rate and training.
+    global_step = get_or_create_global_step()
 
-      # Define your exponentially decaying learning rate
-      lr = tf.train.exponential_decay(
-        learning_rate = initial_learning_rate,
-        global_step = global_step,
-        decay_steps = decay_steps,
-        decay_rate = learning_rate_decay_factor,
-        staircase = True)
+    # Define your exponentially decaying learning rate
+    lr = tf.train.exponential_decay(
+      learning_rate = initial_learning_rate,
+      global_step = global_step,
+      decay_steps = decay_steps,
+      decay_rate = learning_rate_decay_factor,
+      staircase = True)
 
-    	# Now we can define the optimizer that takes on the learning rate
-    	optimizer = tf.train.AdamOptimizer(learning_rate = lr)
+    # Now we can define the optimizer that takes on the learning rate
+    optimizer = tf.train.AdamOptimizer(learning_rate = lr)
 
-      tower_loss = []
-      for i in range(num_gpus):
-        images, _, labels = load_batch(dataset, batch_size=batch_size)
-    	  # Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
-    	  one_hot_labels = slim.one_hot_encoding(labels, dataset.num_classes)
-        with tf.device('/gpu:%d' % i):
-          with tf.name_scope('tower_%d' % i) as scope:
-            # Create the model inference
-            with slim.arg_scope(inception_resnet_v2_arg_scope()):
-              # construct the model and reuse variables
-              logits, end_points = inception_resnet_v2(images, num_classes = dataset.num_classes, is_training=True, reuse=True)
-              # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
-              _ = tf.losses.softmax_cross_entropy(onehot_labels = one_hot_labels, logits = logits)
-              loss = tf.losses.get_total_loss()    # obtain the regularization losses as well
+    tower_loss = []
+    for i in range(num_gpus):
+      images, _, labels = load_batch(dataset, batch_size=batch_size)
+      # Perform one-hot-encoding of the labels (Try one-hot-encoding within the load_batch function!)
+      one_hot_labels = slim.one_hot_encoding(labels, dataset.num_classes)
+      with tf.device('/gpu:%d' % i):
+        with tf.name_scope('tower_%d' % i) as scope:
+          # Create the model inference
+          with slim.arg_scope(inception_resnet_v2_arg_scope()):
+            # construct the model and reuse variables
+            logits, end_points = inception_resnet_v2(images, num_classes = dataset.num_classes, is_training=True, reuse=True)
+            # Performs the equivalent to tf.nn.sparse_softmax_cross_entropy_with_logits but enhanced with checks
+            _ = tf.losses.softmax_cross_entropy(onehot_labels = one_hot_labels, logits = logits)
+            loss = tf.losses.get_total_loss()    # obtain the regularization losses as well
 
-              tower_loss.append(loss)
+            tower_loss.append(loss)
 
-      total_loss = tf.reduce_mean(tower_loss)
+    total_loss = tf.reduce_mean(tower_loss)
 
-      # Create the train_op.
-    	train_op = slim.learning.create_train_op(total_loss, optimizer)
+    # Create the train_op.
+    train_op = slim.learning.create_train_op(total_loss, optimizer)
 
-      # Define the scopes that you want to exclude for restoration
-      exclude = ['InceptionResnetV2/Logits', 'InceptionResnetV2/AuxLogits']
-      variables_to_restore = slim.get_variables_to_restore(exclude = exclude)
+    # Define the scopes that you want to exclude for restoration
+    exclude = ['InceptionResnetV2/Logits', 'InceptionResnetV2/AuxLogits']
+    variables_to_restore = slim.get_variables_to_restore(exclude = exclude)
 
-      # State the metrics that you want to predict. We get a predictions that is not one_hot_encoded.
-      # For multigpu training, the accuracy is calculated wrt the last tower, which is fine for now
-      predictions = tf.argmax(end_points['Predictions'], 1)
-      probabilities = end_points['Predictions']
-      accuracy, accuracy_update = tf.contrib.metrics.streaming_accuracy(predictions, labels)
-      metrics_op = tf.group(accuracy_update, probabilities)
+    # State the metrics that you want to predict. We get a predictions that is not one_hot_encoded.
+    # For multigpu training, the accuracy is calculated wrt the last tower, which is fine for now
+    predictions = tf.argmax(end_points['Predictions'], 1)
+    probabilities = end_points['Predictions']
+    accuracy, accuracy_update = tf.contrib.metrics.streaming_accuracy(predictions, labels)
+    metrics_op = tf.group(accuracy_update, probabilities)
 
-      # Now finally create all the summaries you need to monitor and group them into one summary op.
-      tf.summary.scalar('losses/Total_Loss', total_loss)
-      tf.summary.scalar('accuracy', accuracy)
-      tf.summary.scalar('learning_rate', lr)
-      my_summary_op = tf.summary.merge_all()
+    # Now finally create all the summaries you need to monitor and group them into one summary op.
+    tf.summary.scalar('losses/Total_Loss', total_loss)
+    tf.summary.scalar('accuracy', accuracy)
+    tf.summary.scalar('learning_rate', lr)
+    my_summary_op = tf.summary.merge_all()
 
   # Now we need to create a training step function that runs both the train_op, metrics_op and updates the global_step concurrently.
   def train_step(sess, train_op, global_step):
@@ -268,17 +268,17 @@ def run():
 
     return total_loss, global_step_count
 
-	# Now we create a saver function that actually restores the variables from a checkpoint file in a sess
-	saver = tf.train.Saver(variables_to_restore)
-	
+  # Now we create a saver function that actually restores the variables from a checkpoint file in a sess
+  saver = tf.train.Saver(variables_to_restore)
+
   def restore_fn(sess):
     return saver.restore(sess, checkpoint_file)
 
   # Define your supervisor for running a managed session. Do not run the summary_op automatically or else it will consume too much memory
   sv = tf.train.Supervisor(logdir = log_dir, summary_op = None, init_fn = restore_fn)
 
-	# Run the managed session
-	with sv.managed_session() as sess:
+  # Run the managed session
+  with sv.managed_session() as sess:
     for step in xrange(num_steps_per_epoch * num_epochs):
       # At the start of every epoch, show the vital information:
       if step % num_batches_per_epoch == 0:
