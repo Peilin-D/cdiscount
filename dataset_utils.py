@@ -3,6 +3,7 @@ import os
 import sys
 import tensorflow as tf
 import glob
+from multiprocessing import Pool
 
 # slim = tf.contrib.slim
 #===================================================  Dataset Utils  ===================================================
@@ -106,30 +107,14 @@ def _get_dataset_filename(dataset_dir, split_name, shard_id, tfrecord_filename, 
       tfrecord_filename, split_name, shard_id, _NUM_SHARDS)
   return os.path.join(dataset_dir, output_filename)
 
-
-def _convert_dataset(split_name, filenames, class_ids_to_serial, dataset_dir,
-                tfrecord_filename, _NUM_SHARDS, simulate=False):
-  """Converts the given filenames to a TFRecord dataset.
-
-  Args:
-    split_name: The name of the dataset, either 'train' or 'validation'.
-    filenames: A list of absolute paths to png images.
-    class_ids_to_serial: A dictionary from class ids (int) to serial (int).
-    dataset_dir: The directory where the converted datasets are stored.
-    simulate: Just do simulation
-  """
-  assert split_name in ['train', 'validation']
-
-  num_per_shard = int(math.ceil(len(filenames) / float(_NUM_SHARDS)))
-
+def _worker_process(start_id, end_id, split_name, tfrecord_filename, filenames, class_ids_to_serial, num_per_shard, _NUM_SHARDS, simulate):
   with tf.Graph().as_default():
     image_reader = ImageReader()
-
-    with tf.Session('') as sess:
-
-      for shard_id in range(_NUM_SHARDS):
+    
+    with tf.Session() as sess:
+      for shard_id in range(start_id, end_id):
         output_filename = _get_dataset_filename(
-            dataset_dir, split_name, shard_id, tfrecord_filename = tfrecord_filename, _NUM_SHARDS = _NUM_SHARDS)
+                dataset_dir, split_name, shard_id, tfrecord_filename = tfrecord_filename, _NUM_SHARDS = _NUM_SHARDS)
 
         if not simulate:
           tfrecord_writer = tf.python_io.TFRecordWriter(output_filename)
@@ -153,7 +138,34 @@ def _convert_dataset(split_name, filenames, class_ids_to_serial, dataset_dir,
           if not simulate:
             tfrecord_writer.write(example.SerializeToString())
 
-  sys.stdout.write('\n')
+
+def _convert_dataset(split_name, filenames, class_ids_to_serial, dataset_dir,
+                tfrecord_filename, _NUM_SHARDS, simulate=False):
+  """Converts the given filenames to a TFRecord dataset.
+
+  Args:
+    split_name: The name of the dataset, either 'train' or 'validation'.
+    filenames: A list of absolute paths to png images.
+    class_ids_to_serial: A dictionary from class ids (int) to serial (int).
+    dataset_dir: The directory where the converted datasets are stored.
+    simulate: Just do simulation
+  """
+  assert split_name in ['train', 'validation']
+
+  assert _NUM_SHARDS % 10 == 0 # for simplicity
+
+  num_per_shard = int(math.ceil(len(filenames) / float(_NUM_SHARDS)))
+  num_processes = _NUM_SHARDS / 10
+
+  pool = Pool(num_processes)
+
+  for i in range(num_processes):
+    pool.apply_async(_worker_process, args=(i * 10, (i + 1) * 10, split_name, tfrecord_filename, filenames, class_ids_to_serial, num_per_shard, _NUM_SHARDS, simulate))
+
+  pool.close()
+  pool.join()
+
+  sys.stdout.write('done\n')
   sys.stdout.flush()
 
 def _dataset_exists(dataset_dir, _NUM_SHARDS, output_filename):
